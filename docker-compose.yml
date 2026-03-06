@@ -1,0 +1,101 @@
+version: '3.9'
+
+# BIND_HOST debe ser la IP privada de este Droplet (ej. 10.114.0.2)
+# La encuentras en: DigitalOcean → tu Droplet → Networking → Private IP
+# Esa misma IP va en POSTGRES_HOST y MONGO_URI del backend.
+
+services:
+  # ─── PostgreSQL ───────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: sylvara_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "${BIND_HOST}:${POSTGRES_PORT}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    networks:
+      - sylvara_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ─── MongoDB ─────────────────────────────────────────────────────────────
+  mongo:
+    image: mongo:7.0
+    container_name: sylvara_mongo
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+      MONGO_INITDB_DATABASE: ${MONGO_DB}
+    ports:
+      - "${BIND_HOST}:${MONGO_PORT}:27017"
+    volumes:
+      - mongo_data:/data/db
+      - ./mongo/init:/docker-entrypoint-initdb.d:ro
+    networks:
+      - sylvara_net
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ─── pgAdmin (perfil: tools — nunca en producción) ────────────────────────
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: sylvara_pgadmin
+    restart: unless-stopped
+    profiles:
+      - tools
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD}
+    ports:
+      - "${PGADMIN_BIND_HOST}:${PGADMIN_PORT}:80"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - sylvara_net
+
+  # ─── Mongo Express (perfil: tools — nunca en producción) ─────────────────
+  mongo-express:
+    image: mongo-express:latest
+    container_name: sylvara_mongo_express
+    restart: unless-stopped
+    profiles:
+      - tools
+    environment:
+      ME_CONFIG_MONGODB_ADMINUSERNAME: ${MONGO_ROOT_USER}
+      ME_CONFIG_MONGODB_ADMINPASSWORD: ${MONGO_ROOT_PASSWORD}
+      ME_CONFIG_MONGODB_URL: mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASSWORD}@mongo:27017/
+      ME_CONFIG_BASICAUTH_USERNAME: ${ME_USER}
+      ME_CONFIG_BASICAUTH_PASSWORD: ${ME_PASSWORD}
+    ports:
+      - "${PGADMIN_BIND_HOST}:${ME_PORT}:8081"
+    depends_on:
+      mongo:
+        condition: service_healthy
+    networks:
+      - sylvara_net
+
+volumes:
+  postgres_data:
+    driver: local
+  mongo_data:
+    driver: local
+
+networks:
+  sylvara_net:
+    driver: bridge
